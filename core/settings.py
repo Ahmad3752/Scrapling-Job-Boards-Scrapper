@@ -28,6 +28,7 @@ class Settings:
     excel_skill_gap: str
     job_stale_after_days: int
     job_scraping_boards: List[str]
+    job_scraping_workers: int
 
 
 _settings: Settings | None = None
@@ -94,6 +95,7 @@ def _build_settings() -> Settings:
         excel_skill_gap=os.getenv("EXCEL_SKILL_GAP", "data/skills_master.xlsx"),
         job_stale_after_days=_get_env_int("JOB_STALE_AFTER_DAYS", 7),
         job_scraping_boards=_parse_boards(os.getenv("JOB_SCRAPING_BOARDS")),
+        job_scraping_workers=_get_env_int("JOB_SCRAPING_WORKERS", 1),
     )
 
 

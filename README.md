@@ -2,7 +2,7 @@
 
 # Job Board Scraper
 
-**Multi-board job scraper for Pakistan with enrichment, deduplication, and Supabase persistence**
+**Multi-board job scraper for Pakistan**
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Scrapling](https://img.shields.io/badge/Scrapling-0.4.7-FF6B35)](https://github.com/D4Vinci/Scrapling)
@@ -10,7 +10,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7.4-DC382D?logo=redis&logoColor=white)](https://redis.io)
 [![uv](https://img.shields.io/badge/uv-package%20manager-7C3AED)](https://github.com/astral-sh/uv)
 
-Scrape LinkedIn, Indeed, Rozee.pk and Mustakbil for job listings in Pakistan. Cleans and enriches each posting, deduplicates via Redis, and upserts everything to Supabase.
+Scrape LinkedIn and Indeed for job listings in Pakistan. Cleans and enriches each posting, deduplicates via Redis and upserts everything to Supabase.
 
 </div>
 
@@ -25,16 +25,15 @@ Scrape LinkedIn, Indeed, Rozee.pk and Mustakbil for job listings in Pakistan. Cl
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
 - [Deployment](#deployment)
-- [Environment Variables](#environment-variables)
 - [Project Structure](#project-structure)
 
 ---
 
 ## Overview
 
-`main.py` iterates over a configured list of permitted roles and runs the full pipeline for each one. The spider fetches listing pages and individual job postings using Scrapling's `StealthyFetcher`, which handles Cloudflare challenges and anti-bot detection. Each parser extracts structured fields from the board's HTML.
+`main.py` iterates over a configured list of permitted roles and runs the full pipeline for each one using a configurable number of parallel workers (default: sequential). The spider fetches listing pages and individual job postings using Scrapling's `StealthyFetcher` which handles Cloudflare challenges and anti-bot detection. Each parser extracts structured fields from the board's HTML. Roles that fail during the main pass are retried once sequentially after all other roles complete.
 
-New jobs are checked against a Redis processed set so duplicates are never written twice. Unique jobs pass through the enricher, which cleans the description, matches skills against a master Excel list, parses experience level and year ranges, normalises salary strings, and detects education and job type. Enriched records are upserted to Supabase in batches of 200.
+New jobs are checked against a Redis processed set so duplicates are never written twice. Unique jobs pass through the enricher which cleans the description, matches skills against a master Excel list, parses experience level and year ranges, normalises salary strings and detects education and job type. Enriched records are upserted to Supabase in batches of 200.
 
 A separate `digital_scout_node` in `pipeline/scout.py` handles interactive, query-driven scraping with role-allowlist enforcement. It is not called by `main.py` but is available for integration into a wider agent workflow.
 
@@ -44,16 +43,20 @@ A separate `digital_scout_node` in `pipeline/scout.py` handles interactive, quer
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Permitted roles (PERMITTED_ROLES env var)              │
-│  e.g. ["Backend Developer", "Data Engineer"]            │
+│  Permitted roles (PERMITTED_ROLES_1 / _2 env var)       │
+│  e.g. 25 roles per set                                  │
 └──────────────────────────┬──────────────────────────────┘
+                           │
+                    ┌──────┴──────┐
+                    │ Worker Pool │
+                    └──────┬──────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Spider  (scraper/spider.py)                            │
 │  StealthyFetcher with Cloudflare bypass                 │
-│  One parser per board - LinkedIn, Indeed, Rozee,        │
-│  Mustakbil - each with adaptive CSS selectors           │
+│  One parser per board - LinkedIn and Indeed              │
+│  Each with adaptive CSS selectors                       │
 └──────────────────────────┬──────────────────────────────┘
                            │
                            ▼
@@ -87,7 +90,7 @@ A separate `digital_scout_node` in `pipeline/scout.py` handles interactive, quer
 
 | Feature | Description |
 |:---|:---|
-| **Multi-board scraping** | LinkedIn, Indeed, Rozee.pk and Mustakbil in one run |
+| **Multi-board scraping** | LinkedIn and Indeed with two alternating role sets |
 | **Anti-bot bypass** | Scrapling `StealthyFetcher` with Cloudflare solver and headless/headful fallback |
 | **Role allowlist** | Only scrapes roles listed in `PERMITTED_ROLES` - rejects everything else |
 | **Redis deduplication** | SHA-256 job IDs tracked in a TTL-based Redis set; duplicates never re-processed |
@@ -95,6 +98,8 @@ A separate `digital_scout_node` in `pipeline/scout.py` handles interactive, quer
 | **Skill extraction** | Word-boundary regex matching against a configurable master Excel skill list |
 | **Experience parsing** | Detects level (entry/junior/mid/senior/lead) and min/max year ranges |
 | **Salary normalisation** | Parses currency, amount range and period from free-text salary strings |
+| **Parallel workers** | Configurable thread pool for scraping multiple roles simultaneously |
+| **Failed role retry** | Roles that fail during the main pass are retried once sequentially after all others complete |
 | **Batched upsert** | Supabase upsert in configurable batches with conflict resolution on `job_id` |
 | **Enrichment confidence** | Scores each job 0–1 based on how much structured data was extracted |
 | **Stale job cleanup** | Deletes jobs older than a configurable number of days at the start of each run |
@@ -147,23 +152,22 @@ Edit `.env` with your Supabase credentials and Redis URL (see [Environment Varia
 uv run python main.py
 ```
 
-**Run tests:**
-```bash
-uv run python -m pytest tests/
-```
-
 ---
 
 ## Deployment
 
-The scraper is deployed via **GitHub Actions** with 4 scheduled runs per day - one per platform, every 6 hours. No server required.
+The scraper is deployed via **GitHub Actions** with 8 scheduled runs per day - LinkedIn and Indeed alternate every 3 hours with each role set scraped twice. No server required.
 
-| Time (PKT) | Board |
-|:---|:---|
-| 1:00 AM | LinkedIn |
-| 7:00 AM | Indeed |
-| 1:00 PM | Rozee |
-| 7:00 PM | Mustakbil |
+| Time (PKT) | Board | Role Set |
+|:---|:---|:---|
+| 1:00 AM | LinkedIn | Set 1 |
+| 4:00 AM | Indeed | Set 1 |
+| 7:00 AM | LinkedIn | Set 2 |
+| 10:00 AM | Indeed | Set 2 |
+| 1:00 PM | LinkedIn | Set 1 |
+| 4:00 PM | Indeed | Set 1 |
+| 7:00 PM | LinkedIn | Set 2 |
+| 10:00 PM | Indeed | Set 2 |
 
 ### Setup
 
@@ -175,7 +179,9 @@ The scraper is deployed via **GitHub Actions** with 4 scheduled runs per day - o
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Your Supabase service role key |
 | `REDIS_URL` | Upstash Redis URL (`rediss://...`) |
-| `PERMITTED_ROLES` | JSON array of roles to scrape |
+| `PERMITTED_ROLES_1` | JSON array of roles for the first daily pass |
+| `PERMITTED_ROLES_2` | JSON array of roles for the second daily pass |
+| `JOB_SCRAPING_WORKERS` | Number of parallel workers (default: 1) |
 | `REDIS_MAX_RETRIES` | Number of Redis retry attempts |
 | `REDIS_JOB_QUEUE_PREFIX` | Redis key prefix for job queue |
 | `REDIS_PROCESSED_TTL` | TTL in seconds for processed job IDs |
@@ -184,39 +190,9 @@ The scraper is deployed via **GitHub Actions** with 4 scheduled runs per day - o
 | `JOB_SCRAPING_DOWNLOAD_DELAY` | Delay in seconds between requests |
 | `JOB_STALE_AFTER_DAYS` | Days after which scraped jobs are deleted |
 
-3. Go to **Actions → Daily Job Scrape → Run workflow** to trigger a manual run - use the dropdown to select a specific board or "all"
+3. Go to **Actions → Daily Job Scrape → Run workflow** to trigger a manual run - use the dropdowns to select a specific board and role set, or leave as "all" for both
 
 The workflow file is at `.github/workflows/scrape.yml`.
-
----
-
-## Environment Variables
-
-```env
-# Path to master skill list Excel file
-EXCEL_SKILL_GAP=data/skills_master.xlsx
-
-# Supabase
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-
-# Redis
-REDIS_URL=rediss://default:your_password@your-endpoint.upstash.io:6379
-REDIS_MAX_RETRIES=3
-REDIS_JOB_QUEUE_PREFIX=jobs
-REDIS_PROCESSED_TTL=86400
-
-# Scraping limits
-JOB_SCRAPING_MAX_PAGES_PER_BOARD=2
-JOB_SCRAPING_MAX_JOBS_PER_BOARD=50
-JOB_SCRAPING_DOWNLOAD_DELAY=2.0
-
-# Days after which a scraped job is considered stale and deleted
-JOB_STALE_AFTER_DAYS=7
-
-# Roles to scrape (JSON array or comma-separated)
-PERMITTED_ROLES=["Backend Developer", "Data Engineer", "Software Engineer"]
-```
 
 ---
 
@@ -238,8 +214,6 @@ scraper/
     base.py                <- BaseJobParser ABC with shared utilities
     linkedin.py            <- LinkedIn parser
     indeed.py              <- Indeed parser
-    rozee.py               <- Rozee.pk parser
-    mustakbil.py           <- Mustakbil parser
 pipeline/
   enricher.py              <- JobEnricher: description cleaning, skill/experience/salary extraction
   enricher_node.py         <- LangChain node wrapper around JobEnricher
