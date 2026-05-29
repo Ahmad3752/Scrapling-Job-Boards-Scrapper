@@ -25,6 +25,7 @@ Scrape LinkedIn and Indeed for job listings in Pakistan. Cleans and enriches eac
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
 - [Deployment](#deployment)
+- [Roles Covered](#roles-covered)
 - [Project Structure](#project-structure)
 
 ---
@@ -44,7 +45,7 @@ A separate `digital_scout_node` in `pipeline/scout.py` handles interactive, quer
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Permitted roles (PERMITTED_ROLES_1 / _2 env var)       │
-│  e.g. 25 roles per set                                  │
+│  e.g. 30 roles per set                                  │
 └──────────────────────────┬──────────────────────────────┘
                            │
                     ┌──────┴──────┐
@@ -193,6 +194,20 @@ The scraper is deployed via **GitHub Actions** with 8 scheduled runs per day - L
 3. Go to **Actions → Daily Job Scrape → Run workflow** to trigger a manual run - use the dropdowns to select a specific board and role set, or leave as "all" for both
 
 The workflow file is at `.github/workflows/scrape.yml`.
+
+---
+
+## Roles Covered
+
+60 roles across two sets, each scraped twice daily on both LinkedIn and Indeed.
+
+**Set 1 (30 roles)**
+
+Software Engineer, Data Engineer, UI/UX Designer, DevOps Engineer, Java Developer, Data Analyst, React Developer, MERN Stack Developer, Mobile App Developer, Backend Developer, Associate Software Engineer, Node.js Developer, Flutter Developer, Cybersecurity Analyst, LLM Engineer, NLP Engineer, Information Security Analyst, MLOps Engineer, BI Developer, AWS Cloud Engineer, QA Automation Engineer, iOS Developer, Salesforce Developer, Ethical Hacker, SOC Analyst, DevSecOps Engineer, AI Research Engineer, Conversational AI Developer, Game Developer, AI Product Developer
+
+**Set 2 (30 roles)**
+
+Full-Stack Developer, Machine Learning Engineer, AI Engineer, Frontend Developer, SQA Engineer, Data Scientist, Python Developer, Blockchain Developer, Generative AI Engineer, Business Analyst, Product Manager, AI Automation Engineer, Cybersecurity Engineer, Android Developer, Agentic AI Developer, Cloud Engineer, Computer Vision Engineer, Business Intelligence Analyst, Analytics Engineer, Network Security Engineer, Azure Engineer, Solutions Architect, Penetration Tester, Web3 Developer, Application Security Engineer, Cloud Security Engineer, SIEM Engineer, Technical Project Manager, Big Data Engineer, Polyglot Engineer
 
 ---
 
