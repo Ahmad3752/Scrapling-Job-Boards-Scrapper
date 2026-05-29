@@ -27,6 +27,9 @@ Scrape LinkedIn and Indeed for job listings in Pakistan. Cleans and enriches eac
 - [Deployment](#deployment)
 - [Roles Covered](#roles-covered)
 - [Project Structure](#project-structure)
+- [Frontend](#frontend)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -45,7 +48,6 @@ A separate `digital_scout_node` in `pipeline/scout.py` handles interactive, quer
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Permitted roles (PERMITTED_ROLES_1 / _2 env var)       │
-│  e.g. 30 roles per set                                  │
 └──────────────────────────┬──────────────────────────────┘
                            │
                     ┌──────┴──────┐
@@ -56,7 +58,7 @@ A separate `digital_scout_node` in `pipeline/scout.py` handles interactive, quer
 ┌─────────────────────────────────────────────────────────┐
 │  Spider  (scraper/spider.py)                            │
 │  StealthyFetcher with Cloudflare bypass                 │
-│  One parser per board - LinkedIn and Indeed              │
+│  One parser per board - LinkedIn and Indeed             │
 │  Each with adaptive CSS selectors                       │
 └──────────────────────────┬──────────────────────────────┘
                            │
@@ -201,11 +203,11 @@ The workflow file is at `.github/workflows/scrape.yml`.
 
 60 roles across two sets, each scraped twice daily on both LinkedIn and Indeed.
 
-**Set 1 (30 roles)**
+**Set 1:**
 
 Software Engineer, Data Engineer, UI/UX Designer, DevOps Engineer, Java Developer, Data Analyst, React Developer, MERN Stack Developer, Mobile App Developer, Backend Developer, Associate Software Engineer, Node.js Developer, Flutter Developer, Cybersecurity Analyst, LLM Engineer, NLP Engineer, Information Security Analyst, MLOps Engineer, BI Developer, AWS Cloud Engineer, QA Automation Engineer, iOS Developer, Salesforce Developer, Ethical Hacker, SOC Analyst, DevSecOps Engineer, AI Research Engineer, Conversational AI Developer, Game Developer, AI Product Developer
 
-**Set 2 (30 roles)**
+**Set 2:**
 
 Full-Stack Developer, Machine Learning Engineer, AI Engineer, Frontend Developer, SQA Engineer, Data Scientist, Python Developer, Blockchain Developer, Generative AI Engineer, Business Analyst, Product Manager, AI Automation Engineer, Cybersecurity Engineer, Android Developer, Agentic AI Developer, Cloud Engineer, Computer Vision Engineer, Business Intelligence Analyst, Analytics Engineer, Network Security Engineer, Azure Engineer, Solutions Architect, Penetration Tester, Web3 Developer, Application Security Engineer, Cloud Security Engineer, SIEM Engineer, Technical Project Manager, Big Data Engineer, Polyglot Engineer
 
@@ -239,3 +241,26 @@ services/
 tests/
   test_scout.py            <- query-intent validation tests for digital_scout_node
 ```
+
+---
+
+## Frontend
+
+The dashboard for browsing scraped jobs lives in a separate repo:
+
+**[Scrapling Job Boards Scrapper Frontend](https://github.com/muhammadhaider02/Scrapling-Job-Boards-Scrapper-Frontend)** A Next.js app with live stats, filters and paginated job listings powered by Supabase.
+
+---
+
+## Contributing
+
+1. Open an issue describing the bug or feature before starting any work
+2. Fork the repo and create a branch from `main`
+3. Make your changes and reference the issue in your PR
+4. Submit a pull request for review
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
