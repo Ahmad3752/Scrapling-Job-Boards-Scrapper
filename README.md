@@ -159,7 +159,63 @@ uv run python main.py
 
 ## Deployment
 
-The scraper is deployed via **GitHub Actions** with 8 scheduled runs per day - LinkedIn and Indeed alternate every 3 hours with each role set scraped twice. No server required.
+This repo can be deployed to Render as a FastAPI web service and triggered by cron-job.org every 12 hours.
+
+### Render Web Service
+
+The Render blueprint is in `render.yaml`.
+
+1. Push the repo to GitHub.
+2. In Render, create a new Blueprint or Web Service from the GitHub repo.
+3. Add these environment variables in Render:
+
+| Variable | Description |
+|:---|:---|
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Your Supabase service role key |
+| `SCRAPER_REDIS_URL` | Upstash/Redis URL. Use `rediss://...` for TLS |
+| `SCRAPER_TRIGGER_LOCK_TTL_SECONDS` | `43200` seconds, matching the 12-hour cron interval |
+| `JOB_SCRAPING_BOARDS` | `linkedin,indeed,rozee,mustakbil` |
+| `JOB_SCRAPING_MAX_PAGES_PER_BOARD` | `1` |
+| `JOB_SCRAPING_MAX_JOBS_PER_BOARD` | `15` |
+| `JOB_SCRAPING_WORKERS` | `2` |
+| `JOB_SCRAPING_FETCH_TIMEOUT_MS` | `60000` milliseconds |
+| `JOB_SCRAPING_DOWNLOAD_DELAY` | `2.0` seconds |
+
+Render commands:
+
+```bash
+pip install uv && uv sync --frozen && uv run playwright install --with-deps chromium
+uv run uvicorn app:app --host 0.0.0.0 --port $PORT
+```
+
+Cron-job.org scraper trigger:
+
+```text
+URL: https://YOUR-RENDER-SERVICE.onrender.com/run-scraper
+Method: GET
+Schedule: 0 */12 * * *
+```
+
+Cron-job.org keepalive:
+
+```text
+URL: https://YOUR-RENDER-SERVICE.onrender.com/healthz
+Method: GET
+Schedule: */10 * * * *
+```
+
+Useful endpoints:
+
+```text
+/healthz
+/run-scraper
+/scraper-status
+```
+
+### GitHub Actions Scraper
+
+The scraper is deployed via **GitHub Actions** with 8 scheduled runs per day - LinkedIn and Indeed alternate every 3 hours with each role set scraped twice.
 
 | Time (PKT) | Board | Role Set |
 |:---|:---|:---|

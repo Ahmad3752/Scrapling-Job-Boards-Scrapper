@@ -5,12 +5,14 @@ Handles CRUD operations for jobs, user profiles, applications, and other databas
 """
 
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
 from core.settings import get_settings
 from core.role_filters import filter_allowed_roles
+from core.devlens_roles import filter_role_keys, role_key_from_label
+from scraper.normalization import merge_supabase_job, normalize_job_for_supabase
 
 
 class SupabaseService:
@@ -125,10 +127,91 @@ class SupabaseService:
             return False
     
     # ==================== Job Operations ====================
+
+    def _infer_role_key(self, job: Dict[str, Any], fallback: str = "backend") -> str:
+        role_keys = job.get("role_keys")
+        if isinstance(role_keys, list) and role_keys:
+            inferred = filter_role_keys(role_keys)
+            if inferred:
+                return inferred[0]
+        role_key = str(job.get("role_key") or "").strip()
+        if role_key:
+            inferred = filter_role_keys([role_key])
+            if inferred:
+                return inferred[0]
+        role_label = str(job.get("role_label") or job.get("search_query") or "").strip()
+        return role_key_from_label(role_label) or fallback
+
+    def upsert_scraper_job(
+        self,
+        job: Dict[str, Any],
+        role_key: Optional[str] = None,
+        role_query: Optional[str] = None,
+    ) -> str:
+        """
+        Insert or update one normalized scraper job by durable job_hash.
+
+        Returns:
+            "inserted" or "updated"
+        """
+        resolved_role_key = role_key or self._infer_role_key(job)
+        record = normalize_job_for_supabase(job, resolved_role_key, role_query)
+
+        existing = (
+            self.client.table("jobs")
+            .select("id,created_at,role_keys,role_labels,role_queries,platforms,source_refs")
+            .eq("job_hash", record["job_hash"])
+            .limit(1)
+            .execute()
+        )
+
+        if existing.data:
+            existing_record = existing.data[0]
+            merged = merge_supabase_job(existing_record, record)
+            (
+                self.client.table("jobs")
+                .update(merged)
+                .eq("id", existing_record["id"])
+                .execute()
+            )
+            print(
+                "Supabase jobs UPDATE "
+                f"job_id={record.get('job_id')} "
+                f"hash={record.get('job_hash', '')[:12]} "
+                f"role={resolved_role_key} platform={record.get('platform')} "
+                f"title={record.get('title')!r}"
+            )
+            return "updated"
+
+        self.client.table("jobs").insert(record).execute()
+        print(
+            "Supabase jobs INSERT "
+            f"job_id={record.get('job_id')} "
+            f"hash={record.get('job_hash', '')[:12]} "
+            f"role={resolved_role_key} platform={record.get('platform')} "
+            f"title={record.get('title')!r}"
+        )
+        return "inserted"
+
+    def upsert_scraper_jobs(
+        self,
+        jobs: List[Dict[str, Any]],
+        role_key: Optional[str] = None,
+        role_query: Optional[str] = None,
+    ) -> Dict[str, int]:
+        result = {"inserted": 0, "updated": 0, "failed": 0}
+        for job in jobs:
+            try:
+                status = self.upsert_scraper_job(job, role_key=role_key, role_query=role_query)
+                result[status] += 1
+            except APIError as e:
+                result["failed"] += 1
+                print(f"Failed to upsert scraper job {job.get('job_id')}: {e}")
+        return result
     
     def bulk_insert_jobs(self, jobs: List[Dict]) -> int:
         """
-        Insert multiple jobs with upsert on conflict.
+        Insert multiple jobs with upsert on durable job_hash.
         
         Args:
             jobs: List of job dictionaries
@@ -138,70 +221,35 @@ class SupabaseService:
         """
         if not jobs:
             return 0
-        
-        try:
-            # Prepare jobs for insertion (map from JobData to database schema)
-            job_records = []
-            for job in jobs:
-                # Extract experience as integer (min_years from parsed data or fallback)
-                experience_int = None
-                if job.get('experience_parsed') and job['experience_parsed'].get('min_years'):
-                    experience_int = job['experience_parsed']['min_years']
-                elif job.get('experience_required'):
-                    # Try to extract number from text
-                    import re
-                    match = re.search(r'(\d+)', str(job.get('experience_required', '')))
-                    if match:
-                        experience_int = int(match.group(1))
-                
-                date_scrapped = job.get('date_scrapped') or datetime.utcnow().isoformat()
 
-                record = {
-                    'job_id': job['job_id'],
-                    'job_title': job.get('title', ''),
-                    'job_description': job.get('description', ''),
-                    'skills_required': job.get('skills', []),
-                    'experience_required': experience_int,  # INTEGER
-                    'education_required': job.get('education_required'),
-                    'job_type': job.get('employment_type', ''),
-                    'location': job.get('location', ''),
-                    'industry': job.get('industry'),
-                    'company': job.get('company', ''),
-                    'url': job.get('job_url', ''),
-                    'job_source': job.get('job_source') or job.get('board', ''),
-                    'date_scrapped': date_scrapped,
-                }
-                job_records.append(record)
-            
-            # Upsert (insert or update on conflict)
-            response = self.client.table("jobs").upsert(
-                job_records,
-                on_conflict='job_id',
-                returning='minimal'
-            ).execute()
-            
-            print(f"Inserted/updated {len(job_records)} jobs to Supabase")
-            return len(job_records)
-            
-        except APIError as e:
-            print(f"Failed to bulk insert jobs: {e}")
-            return 0
+        result = self.upsert_scraper_jobs(jobs)
+        affected = result["inserted"] + result["updated"]
+        print(
+            f"Supabase scraper upsert complete: "
+            f"{result['inserted']} inserted, {result['updated']} updated, {result['failed']} failed"
+        )
+        return affected
 
-    def delete_stale_jobs(self, days: int = 7) -> int:
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    def mark_stale_jobs_inactive(self, days: int = 7) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         try:
             response = (
                 self.client.table("jobs")
-                .delete()
-                .lt("date_scrapped", cutoff)
+                .update({"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()})
+                .lt("last_seen_at", cutoff)
+                .eq("is_active", True)
                 .execute()
             )
-            deleted = len(response.data) if response.data else 0
-            print(f"Deleted {deleted} stale jobs older than {days} days")
-            return deleted
+            marked = len(response.data) if response.data else 0
+            print(f"Marked {marked} stale jobs inactive older than {days} days")
+            return marked
         except APIError as e:
-            print(f"Failed to delete stale jobs: {e}")
+            print(f"Failed to mark stale jobs inactive: {e}")
             return 0
+
+    def delete_stale_jobs(self, days: int = 7) -> int:
+        """Backward-compatible alias; stale jobs are now retained and deactivated."""
+        return self.mark_stale_jobs_inactive(days=days)
 
     def get_job_by_id(self, job_id: str) -> Optional[Dict]:
         """
@@ -295,10 +343,10 @@ class SupabaseService:
             
             if skills:
                 # Use Postgres array contains operator
-                query = query.contains("skills_required", skills)
+                query = query.contains("tech_stack", skills)
             
             if location:
-                query = query.ilike("location", f"%{location}%")
+                query = query.ilike("location_raw", f"%{location}%")
             
             response = query.limit(limit).order("scraped_at", desc=True).execute()
             return response.data if response.data else []
@@ -330,23 +378,25 @@ class SupabaseService:
         if not roles:
             return []
 
-        allowed_roles = filter_allowed_roles(roles, self.settings.permitted_roles)
-        if not allowed_roles:
+        role_keys = filter_role_keys(roles) or filter_role_keys(
+            filter_allowed_roles(roles, self.settings.permitted_roles)
+        )
+        if not role_keys:
             print("Requested roles are outside configured allowlist")
             return []
 
         try:
             query = self.client.table("jobs").select("*")
 
-            # Build OR filter: job_title ILIKE '%Role1%' OR job_title ILIKE '%Role2%' ...
-            ilike_clauses = ",".join(
-                f"job_title.ilike.%{role.strip()}%" for role in allowed_roles
-            )
-            query = query.or_(ilike_clauses)
+            if hasattr(query, "overlaps"):
+                query = query.overlaps("role_keys", role_keys)
+            else:
+                query = query.contains("role_keys", [role_keys[0]])
 
             response = (
                 query
-                .order("job_id")
+                .eq("is_active", True)
+                .order("scraped_at", desc=True)
                 .range(offset, offset + limit - 1)
                 .execute()
             )
@@ -355,6 +405,60 @@ class SupabaseService:
         except APIError as e:
             print(f"Failed to get_jobs_for_roles: {e}")
             return []
+
+    def log_scrape_run(
+        self,
+        *,
+        run_id: str,
+        started_at: str,
+        finished_at: str,
+        status: str,
+        platform: str,
+        role_key: str,
+        role_label: str,
+        query: str,
+        location: str,
+        scraped_count: int = 0,
+        inserted_count: int = 0,
+        updated_count: int = 0,
+        skipped_count: int = 0,
+        failed_count: int = 0,
+        redis_stats_key: Optional[str] = None,
+        error_message: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        record = {
+            "run_id": run_id,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "status": status,
+            "platform": platform,
+            "role_key": role_key,
+            "role_label": role_label,
+            "query": query,
+            "location": location,
+            "scraped_count": scraped_count,
+            "inserted_count": inserted_count,
+            "updated_count": updated_count,
+            "skipped_count": skipped_count,
+            "failed_count": failed_count,
+            "redis_stats_key": redis_stats_key,
+            "error_message": error_message,
+            "metadata": metadata or {},
+        }
+        try:
+            self.client.table("scrape_logs").insert(record).execute()
+            print(
+                "Supabase scrape_logs INSERT "
+                f"run_id={run_id} status={status} "
+                f"role={role_key} platform={platform} query={query!r} "
+                f"scraped={scraped_count} inserted={inserted_count} "
+                f"updated={updated_count} skipped={skipped_count} failed={failed_count}"
+            )
+            return True
+        except APIError as e:
+            print(f"Failed to write scrape log: {e}")
+            return False
 
     
     # ==================== Application Operations ====================

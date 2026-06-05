@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DevLens Jobs Pilot</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p>DevLens Pilot</p>
+          <h1>Relevant developer jobs</h1>
+        </div>
+        <span id="cache-pill" class="cache-pill">Cache not loaded</span>
+      </header>
+
+      <section class="controls" aria-label="Job search controls">
+        <label>
+          <span>Role</span>
+          <select id="role-select"></select>
+        </label>
+        <label>
+          <span>Opportunity</span>
+          <select id="type-select">
+            <option value="all">All opportunities</option>
+            <option value="jobs">Jobs only</option>
+            <option value="internships">Internships only</option>
+          </select>
+        </label>
+        <button id="load-button" type="button">Load cache</button>
+        <button id="refresh-button" class="primary" type="button">Refresh jobs</button>
+      </section>
+
+      <section id="status" class="status-panel">
+        Choose a role and load the cache. Use refresh when you want to scrape fresh results.
+      </section>
+
+      <section class="meta-row">
+        <div>
+          <span>Role</span>
+          <strong id="active-role">-</strong>
+        </div>
+        <div>
+          <span>Showing</span>
+          <strong id="job-count">0 jobs</strong>
+        </div>
+        <div>
+          <span>Last refresh</span>
+          <strong id="fetched-at">Not refreshed</strong>
+        </div>
+      </section>
+
+      <section id="job-list" class="job-grid" aria-live="polite"></section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

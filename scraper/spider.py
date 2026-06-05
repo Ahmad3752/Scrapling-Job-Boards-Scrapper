@@ -35,6 +35,7 @@ def _fetch_with_scrapling(url: str, board: str, headless: bool):
         network_idle=True,
         solve_cloudflare=True,
         google_search=(board == "mustakbil"),
+        timeout=get_settings().job_scraping_fetch_timeout_ms,
     )
 
 

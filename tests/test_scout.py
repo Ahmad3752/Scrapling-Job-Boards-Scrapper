@@ -54,6 +54,13 @@ class TestScoutQueryValidation(unittest.TestCase):
         supabase_mock.bulk_insert_jobs.assert_not_called()
 
     def test_allows_valid_job_query(self):
+        import core.settings
+
+        core.settings._settings = None
+        os.environ["PERMITTED_ROLES"] = '["AI Engineer"]'
+        self.addCleanup(lambda: os.environ.pop("PERMITTED_ROLES", None))
+        self.addCleanup(lambda: setattr(core.settings, "_settings", None))
+
         state = {
             "messages": [HumanMessage(content="Find AI engineer jobs in Lahore")],
             "user_id": "test_user_123",

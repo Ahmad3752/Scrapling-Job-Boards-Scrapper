@@ -30,5 +30,7 @@ Thumbs.db
 # Runtime artifacts
 *.log
 *.jsonl
+data/job_cache/
 tmp/
 .claude/
+DEVLENS_SCRAPER_CONTEXT.md

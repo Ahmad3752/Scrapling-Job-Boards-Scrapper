@@ -6,6 +6,8 @@ Handles job enqueueing, dequeueing, and tracking processed jobs to prevent dupli
 
 import json
 import hashlib
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional
 from redis import Redis
 from redis.exceptions import RedisError, ConnectionError
@@ -48,6 +50,30 @@ class RedisService:
     def _get_processed_key(self) -> str:
         """Get Redis key for processed jobs set."""
         return f"{self.settings.redis_job_queue_prefix}:processed"
+
+    def seen_job_key(self, job_id: str) -> str:
+        return f"scraper:seen:job:{job_id}"
+
+    def stats_key(self, platform: str) -> str:
+        platform_slug = (platform or "unknown").strip().lower()
+        return f"scraper:stats:{platform_slug}:today"
+
+    def scraper_trigger_lock_key(self) -> str:
+        return "scraper:trigger:lock"
+
+    def scraper_trigger_status_key(self) -> str:
+        return "scraper:trigger:status"
+
+    def _pakistan_today(self) -> str:
+        return datetime.now(ZoneInfo("Asia/Karachi")).date().isoformat()
+
+    def _ensure_stats_date(self, key: str) -> None:
+        today = self._pakistan_today()
+        current = self.client.hget(key, "date")
+        if current and current != today:
+            self.client.delete(key)
+        self.client.hset(key, "date", today)
+        self.client.expire(key, self.settings.scraper_stats_ttl)
     
     def _generate_job_id(self, job_data: Dict) -> str:
         """
@@ -74,10 +100,127 @@ class RedisService:
             True if job was previously processed
         """
         try:
-            return self.client.sismember(self._get_processed_key(), job_id)
+            return bool(self.client.exists(self.seen_job_key(job_id)))
         except RedisError as e:
             print(f"Redis error checking processed job: {e}")
             return False
+
+    def reserve_job(self, job_id: str) -> bool:
+        """
+        Reserve a scraped job for processing using the scraper dedupe contract.
+
+        Redis command: SET scraper:seen:job:{job_id} 1 NX EX 86400
+        """
+        try:
+            return bool(
+                self.client.set(
+                    self.seen_job_key(job_id),
+                    "1",
+                    nx=True,
+                    ex=self.settings.scraper_seen_ttl,
+                )
+            )
+        except RedisError as e:
+            print(f"Failed to reserve job in Redis: {e}")
+            return False
+
+    def release_job_reservation(self, job_id: str) -> bool:
+        """Release a reservation after a failed database write so it can retry."""
+        try:
+            self.client.delete(self.seen_job_key(job_id))
+            return True
+        except RedisError as e:
+            print(f"Failed to release job reservation: {e}")
+            return False
+
+    def increment_scrape_stat(self, platform: str, field: str, amount: int = 1) -> int:
+        """Increment today's per-platform scraper stats hash."""
+        if field not in {"scraped", "inserted", "updated", "skipped", "failed"}:
+            raise ValueError(f"Unsupported scraper stats field: {field}")
+
+        key = self.stats_key(platform)
+        try:
+            self._ensure_stats_date(key)
+            value = self.client.hincrby(key, field, amount)
+            self.client.expire(key, self.settings.scraper_stats_ttl)
+            return int(value)
+        except RedisError as e:
+            print(f"Failed to increment scrape stat {key}.{field}: {e}")
+            return 0
+
+    def get_scrape_stats(self, platform: str) -> Dict[str, int | str]:
+        key = self.stats_key(platform)
+        try:
+            raw = self.client.hgetall(key)
+        except RedisError as e:
+            print(f"Failed to get scrape stats for {platform}: {e}")
+            raw = {}
+
+        stats: Dict[str, int | str] = {"date": raw.get("date") or self._pakistan_today()}
+        for field in ("scraped", "inserted", "updated", "skipped", "failed"):
+            stats[field] = int(raw.get(field, 0) or 0)
+        return stats
+
+    def acquire_scraper_trigger_lock(self, trigger_id: str) -> bool:
+        """Reserve the cron-triggered scraper slot for one long-running run."""
+        try:
+            return bool(
+                self.client.set(
+                    self.scraper_trigger_lock_key(),
+                    trigger_id,
+                    nx=True,
+                    ex=self.settings.scraper_trigger_lock_ttl_seconds,
+                )
+            )
+        except RedisError as e:
+            print(f"Failed to acquire scraper trigger lock: {e}")
+            return False
+
+    def release_scraper_trigger_lock(self, trigger_id: str | None = None) -> bool:
+        """Release the scraper trigger lock, preserving a newer owner's lock."""
+        try:
+            if trigger_id:
+                current = self.client.get(self.scraper_trigger_lock_key())
+                if current and current != trigger_id:
+                    return False
+            self.client.delete(self.scraper_trigger_lock_key())
+            return True
+        except RedisError as e:
+            print(f"Failed to release scraper trigger lock: {e}")
+            return False
+
+    def get_scraper_trigger_lock(self) -> str | None:
+        try:
+            return self.client.get(self.scraper_trigger_lock_key())
+        except RedisError as e:
+            print(f"Failed to read scraper trigger lock: {e}")
+            return None
+
+    def set_scraper_trigger_status(self, payload: Dict) -> bool:
+        status = {
+            **payload,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        ttl = max(self.settings.scraper_trigger_lock_ttl_seconds * 2, 86400)
+        try:
+            self.client.set(self.scraper_trigger_status_key(), json.dumps(status), ex=ttl)
+            return True
+        except (RedisError, TypeError) as e:
+            print(f"Failed to set scraper trigger status: {e}")
+            return False
+
+    def get_scraper_trigger_status(self) -> Dict:
+        try:
+            raw = self.client.get(self.scraper_trigger_status_key())
+            if not raw:
+                return {"status": "idle"}
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                return {"status": "idle"}
+            return payload
+        except (RedisError, json.JSONDecodeError) as e:
+            print(f"Failed to get scraper trigger status: {e}")
+            return {"status": "idle"}
     
     def enqueue_job(self, job_data: Dict) -> bool:
         """
@@ -181,11 +324,13 @@ class RedisService:
             True if marked successfully
         """
         try:
-            processed_key = self._get_processed_key()
-            self.client.sadd(processed_key, job_id)
-            # Set TTL on the set (refresh on each add)
-            self.client.expire(processed_key, self.settings.redis_processed_ttl)
-            return True
+            return bool(
+                self.client.set(
+                    self.seen_job_key(job_id),
+                    "1",
+                    ex=self.settings.scraper_seen_ttl,
+                )
+            )
         except RedisError as e:
             print(f"Failed to mark job as processed: {e}")
             return False
@@ -211,7 +356,8 @@ class RedisService:
             Processed job count
         """
         try:
-            return self.client.scard(self._get_processed_key())
+            keys = self.client.keys("scraper:seen:job:*")
+            return len(keys)
         except RedisError as e:
             print(f"Failed to get processed count: {e}")
             return 0
